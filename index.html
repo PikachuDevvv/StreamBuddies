@@ -104,7 +104,7 @@ function showRoom(code){
  $('connectionState').textContent='Conectado ao servidor';
 }
 async function getMedia(video){
- try{return await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:video?{width:{ideal:640},height:{ideal:360},frameRate:{ideal:24,max:30}}:false})}
+ try{return await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:video?{width:{ideal:480,max:640},height:{ideal:270,max:360},frameRate:{ideal:20,max:24}}:false})}
  catch(e){throw new Error('Não foi possível acessar microfone/câmera. Confira as permissões e tente novamente. '+e.message)}
 }
 function addTile(id,name,stream,isLocal=false){
@@ -143,8 +143,29 @@ function makePeer(peer, initiator){
 }
 function connectServer(){
  return new Promise((resolve,reject)=>{
-  socket=io(SERVER_URL,{transports:['websocket','polling'],timeout:20000});
-  socket.once('connect',resolve);socket.once('connect_error',e=>reject(new Error('Não foi possível conectar ao servidor: '+e.message)));
+  let settled=false;
+  const finish=(error)=>{if(settled)return;settled=true;clearTimeout(connectTimer);if(error)reject(error);else resolve();};
+  // Render pode estar acordando no plano gratuito; celulares/rede lenta precisam de mais tempo.
+  socket=io(SERVER_URL,{
+   transports:['polling','websocket'],
+   timeout:60000,
+   reconnection:true,
+   reconnectionAttempts:6,
+   reconnectionDelay:1500,
+   reconnectionDelayMax:5000
+  });
+  const connectTimer=setTimeout(()=>finish(new Error('O servidor demorou demais para responder. Confira sua internet e tente novamente.')),180000);
+  socket.once('connect',()=>finish());
+  socket.on('connect_error',e=>{
+   console.warn('Falha temporária de conexão:',e.message);
+   updateLoading('Acordando o servidor','O servidor pode estar iniciando. Vamos tentar novamente automaticamente; não feche a página.');
+  });
+  socket.io.on('reconnect_attempt',attempt=>{
+   updateLoading('Tentando conectar ('+attempt+'/6)','A conexão está lenta. O StreamBuddies está tentando novamente automaticamente.');
+  });
+  socket.io.once('reconnect_failed',()=>finish(new Error('Não conseguimos alcançar o servidor após várias tentativas. Verifique a internet e tente novamente.')));
+  socket.once('connect_error_final',e=>finish(new Error(e?.message||'Falha ao conectar ao servidor.')));
+
   socket.on('peer-joined',p=>{if(p.id!==socket.id){const pc=makePeer(p,false);pc.peerName=p.name;renderParticipants();status(p.name+' entrou na sala.')}});
   socket.on('peer-left',p=>{removePeer(p.id);status('Um participante saiu da sala.')});
   socket.on('offer',async p=>{
@@ -163,16 +184,17 @@ function connectServer(){
 async function start(name,video,create){
  const createButton=$('create'),joinButton=$('join');
  createButton.disabled=true;joinButton.disabled=true;
- showLoading('Preparando câmera e microfone','Se o navegador pedir permissão, toque em Permitir.');
+ showLoading('Conectando ao StreamBuddies','Estamos preparando a conexão. Em celulares e redes lentas, pode demorar um pouco.');
  try{
   if(!name.trim())throw new Error('Digite seu apelido.');
   if(!navigator.mediaDevices?.getUserMedia)throw new Error('Este navegador não permite acessar câmera e microfone. Abra o site em HTTPS e tente novamente.');
   if(typeof io!=='function')throw new Error('A biblioteca de conexão não carregou. Confira sua internet e recarregue a página.');
   myName=name.trim();
-  localStream=await getMedia(video);
-  updateLoading('Conectando ao servidor','Câmera e microfone prontos. Estamos conectando à sala...');
+  updateLoading('Conectando ao servidor','Se o servidor estiver descansando, pode levar até alguns instantes para acordar.');
   await connectServer();
-  updateLoading(create?'Criando sua sala':'Entrando na sala','Quase lá! Estamos preparando a conexão com os participantes.');
+  updateLoading('Preparando câmera e microfone','Se o navegador pedir permissão, toque em Permitir.');
+  localStream=await getMedia(video);
+  updateLoading(create?'Criando sua sala':'Entrando na sala','Conexão pronta! Estamos preparando sua sala...');
   if(create){
    const result=await new Promise(resolve=>socket.emit('create-room',{name:myName},resolve));
    if(!result?.ok)throw new Error(result?.error||'Não foi possível criar a sala.');
