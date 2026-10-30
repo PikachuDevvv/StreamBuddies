@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>StreamBuddies</title>
+<style>
+:root{color-scheme:dark;font-family:Inter,system-ui,Segoe UI,Arial,sans-serif}*{box-sizing:border-box}
+body{margin:0;min-height:100vh;background:radial-gradient(ellipse at top,#172554 0,transparent 55%),#0b1020;color:#eef2ff}
+main{max-width:1100px;margin:auto;padding:28px 18px}.brand{font-size:32px;font-weight:900;letter-spacing:-1.5px}.brand span{color:#60a5fa}
+.sub{color:#a5b4fc;margin:8px 0 24px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:16px}
+.card{background:#111a30;border:1px solid #293653;border-radius:18px;padding:20px;box-shadow:0 15px 45px #0004}
+h2{font-size:18px;margin:0 0 14px}label{display:block;color:#bac7e8;font-size:13px;margin:12px 0 6px}
+input{width:100%;padding:13px;border:1px solid #344563;border-radius:10px;background:#0b1326;color:white;font-size:16px}
+button{border:0;border-radius:10px;padding:12px 15px;background:#2563eb;color:white;font-weight:750;cursor:pointer;margin-top:12px;font-size:14px}
+button.secondary{background:#263550}button.danger{background:#991b1b}button:disabled{opacity:.5;cursor:not-allowed}
+.status{padding:12px;border-radius:10px;background:#0b1326;color:#cbd5e1;margin-top:14px;white-space:pre-wrap;overflow-wrap:anywhere}
+.hidden{display:none!important}.roomcode{font-size:32px;font-weight:900;letter-spacing:5px;color:#93c5fd}
+.small{font-size:12px;color:#94a3b8;line-height:1.5}.toolbar{display:flex;gap:8px;flex-wrap:wrap}.toolbar button{flex:1;min-width:130px}
+.video-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:14px}
+.tile{background:#080e1c;border:1px solid #293653;border-radius:14px;overflow:hidden;min-width:0}
+.tile video{width:100%;aspect-ratio:16/9;object-fit:cover;background:#020617;display:block}
+.tile-info{padding:10px 12px;display:flex;justify-content:space-between;gap:8px;align-items:center}
+.name{font-weight:700;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.pill{font-size:11px;border:1px solid #3b4b69;border-radius:20px;padding:4px 8px;color:#bfdbfe}
+.participants{display:flex;flex-wrap:wrap;gap:8px;margin-top:12px}.participant{background:#0b1326;border:1px solid #263550;border-radius:10px;padding:8px 10px;font-size:13px}
+.dot{color:#4ade80}.muted{color:#fca5a5}.room-head{display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap}
+</style>
+</head>
+<body><main>
+<div class="brand">Stream<span>Buddies</span></div>
+<div class="sub">Sala de áudio e vídeo com transmissão individual entre todos os participantes.</div>
+
+<section id="start" class="grid">
+ <div class="card"><h2>🎥 Criar sala</h2><label>Seu apelido</label><input id="hostName" value="Streamer" maxlength="32">
+ <label>Entrar com câmera</label><select id="hostVideo"><option value="yes">Câmera ligada</option><option value="no">Somente microfone</option></select>
+ <button id="create">Criar sala</button></div>
+ <div class="card"><h2>📱 Entrar na sala</h2><label>Seu apelido</label><input id="guestName" placeholder="Como devemos te chamar?" maxlength="32">
+ <label>Código da sala</label><input id="code" placeholder="ABC123" maxlength="6">
+ <label>Vídeo</label><select id="guestVideo"><option value="yes">Câmera ligada</option><option value="no">Somente microfone</option></select>
+ <button id="join">Entrar na chamada</button></div>
+</section>
+
+<section id="room" class="hidden">
+ <div class="card">
+  <div class="room-head"><div><div class="small">CÓDIGO DA SALA</div><div class="roomcode" id="roomCode"></div><div class="small" id="invite"></div></div><span class="pill" id="connectionState">Conectando…</span></div>
+  <div class="toolbar"><button class="secondary" id="copy">Copiar convite</button><button class="secondary" id="mute">Silenciar microfone</button><button class="secondary" id="camera">Desligar câmera</button><button class="danger" id="leave">Sair da sala</button></div>
+  <h2 style="margin-top:22px">Participantes</h2><div id="participants" class="participants"></div>
+  <h2 style="margin-top:22px">Câmeras e áudio</h2><p class="small">Cada pessoa envia seu próprio áudio e vídeo diretamente aos outros participantes. Se o navegador bloquear o som automático, toque/click na página.</p>
+  <div id="videos" class="video-grid"></div>
+ </div>
+</section>
+<div id="status" class="status">Pronto para criar ou entrar em uma sala.</div>
+<p class="small">Use HTTPS e permita microfone/câmera. O áudio e o vídeo são transmitidos entre os participantes. Entre somente em salas com pessoas que consentiram com a transmissão.</p>
+</main>
+
+<script src="https://cdn.socket.io/4.8.1/socket.io.min.js"></script>
+<script>
+(() => {
+'use strict';
+const SERVER_URL = 'https://streambuddies.onrender.com';
+const ICE_CONFIG = {iceServers:[{urls:'stun:stun.l.google.com:19302'}]};
+const $ = id => document.getElementById(id);
+let socket=null, roomCode='', myName='', isHost=false, localStream=null, peers=new Map(), remoteStreams=new Map(), micEnabled=true, cameraEnabled=true;
+
+function status(message){$('status').textContent=message}
+function escapeHtml(value){return String(value).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function showRoom(code){
+ $('start').classList.add('hidden');$('room').classList.remove('hidden');$('roomCode').textContent=code;
+ $('invite').textContent=`Convide pelo link ${location.href.split('?')[0]} e código ${code}`;
+ $('connectionState').textContent='Conectado ao servidor';
+}
+async function getMedia(video){
+ try{return await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:video?{width:{ideal:640},height:{ideal:360},frameRate:{ideal:24,max:30}}:false})}
+ catch(e){throw new Error('Não foi possível acessar microfone/câmera. Confira as permissões e tente novamente. '+e.message)}
+}
+function addTile(id,name,stream,isLocal=false){
+ let tile=document.getElementById('tile-'+id);
+ if(!tile){tile=document.createElement('div');tile.className='tile';tile.id='tile-'+id;
+  tile.innerHTML=`<video autoplay playsinline></video><div class="tile-info"><span class="name"></span><span class="pill"></span></div>`;
+  $('videos').appendChild(tile)}
+ const video=tile.querySelector('video');if(video.srcObject!==stream)video.srcObject=stream;
+ video.muted=isLocal;video.play().catch(()=>status('Toque/click na página para permitir reprodução de áudio.'));
+ tile.querySelector('.name').textContent=name+(isLocal?' (Você)':'');
+ tile.querySelector('.pill').textContent=isLocal?'Local':'Ao vivo';
+}
+function removePeer(id){
+ const pc=peers.get(id);if(pc){pc.ontrack=null;pc.close();peers.delete(id)}
+ remoteStreams.delete(id);document.getElementById('tile-'+id)?.remove();renderParticipants();
+}
+function renderParticipants(){
+ const items=[{id:socket?.id,name:myName,local:true},...Array.from(peers.keys()).map(id=>({id,name:peers.get(id).peerName||'Convidado'}))].filter(x=>x.id);
+ $('participants').innerHTML=items.map(p=>`<span class="participant"><span class="dot">●</span> ${escapeHtml(p.name)}${p.local?' (Você)':''}</span>`).join('');
+}
+function makePeer(peer, initiator){
+ if(peers.has(peer.id))return peers.get(peer.id);
+ const pc=new RTCPeerConnection(ICE_CONFIG);pc.peerName=peer.name||'Convidado';peers.set(peer.id,pc);
+ localStream.getTracks().forEach(track=>pc.addTrack(track,localStream));
+ pc.onicecandidate=e=>{if(e.candidate)socket.emit('ice',{to:peer.id,candidate:e.candidate})};
+ pc.ontrack=e=>{
+  let stream=e.streams[0];
+  if(!stream){stream=remoteStreams.get(peer.id)||new MediaStream();stream.addTrack(e.track)}
+  remoteStreams.set(peer.id,stream);addTile(peer.id,pc.peerName,stream,false);
+ };
+ pc.onconnectionstatechange=()=>{if(['failed','closed','disconnected'].includes(pc.connectionState)){if(pc.connectionState!=='disconnected')removePeer(peer.id)}};
+ if(initiator){
+  pc.createOffer().then(o=>pc.setLocalDescription(o)).then(()=>socket.emit('offer',{to:peer.id,description:pc.localDescription})).catch(e=>{console.error(e);status('Erro ao negociar conexão com '+pc.peerName)});
+ }
+ return pc;
+}
+function connectServer(){
+ return new Promise((resolve,reject)=>{
+  socket=io(SERVER_URL,{transports:['websocket','polling'],timeout:20000});
+  socket.once('connect',resolve);socket.once('connect_error',e=>reject(new Error('Não foi possível conectar ao servidor: '+e.message)));
+  socket.on('peer-joined',p=>{if(p.id!==socket.id){const pc=makePeer(p,false);pc.peerName=p.name;renderParticipants();status(p.name+' entrou na sala.')}});
+  socket.on('peer-left',p=>{removePeer(p.id);status('Um participante saiu da sala.')});
+  socket.on('offer',async p=>{
+   try{
+    let pc=peers.get(p.from);
+    if(!pc)pc=makePeer({id:p.from,name:p.name||'Convidado'},false);
+    await pc.setRemoteDescription(p.description);
+    const answer=await pc.createAnswer();await pc.setLocalDescription(answer);
+    socket.emit('answer',{to:p.from,description:pc.localDescription});
+   }catch(e){console.error(e);status('Falha ao receber conexão de um participante.')}
+  });
+  socket.on('answer',async p=>{try{await peers.get(p.from)?.setRemoteDescription(p.description)}catch(e){console.warn(e)}});
+  socket.on('ice',async p=>{try{await peers.get(p.from)?.addIceCandidate(p.candidate)}catch(e){console.warn(e)}});
+ });
+}
+async function start(name,video,create){
+ if(!name.trim())throw new Error('Digite seu apelido.');
+ myName=name.trim();localStream=await getMedia(video);
+ await connectServer();
+ if(create){
+  const result=await new Promise(resolve=>socket.emit('create-room',{name:myName},resolve));
+  if(!result?.ok)throw new Error(result?.error||'Não foi possível criar a sala.');
+  roomCode=result.code;isHost=true;
+ }else{
+  const result=await new Promise(resolve=>socket.emit('join-room',{code:$('code').value,name:myName},resolve));
+  if(!result?.ok)throw new Error(result?.error||'Não foi possível entrar na sala.');
+  roomCode=result.code;isHost=false;
+  for(const peer of result.peers||[])makePeer(peer,true);
+ }
+ showRoom(roomCode);addTile(socket.id,myName,localStream,true);renderParticipants();
+ status('Você está na sala! Compartilhe o código com os convidados.');
+}
+$('create').onclick=()=>start($('hostName').value,$('hostVideo').value==='yes',true).catch(e=>status(e.message));
+$('join').onclick=()=>start($('guestName').value,$('guestVideo').value==='yes',false).catch(e=>status(e.message));
+$('mute').onclick=()=>{
+ micEnabled=!micEnabled;localStream?.getAudioTracks().forEach(t=>t.enabled=micEnabled);
+ $('mute').textContent=micEnabled?'Silenciar microfone':'Ativar microfone';
+};
+$('camera').onclick=()=>{
+ cameraEnabled=!cameraEnabled;localStream?.getVideoTracks().forEach(t=>t.enabled=cameraEnabled);
+ $('camera').textContent=cameraEnabled?'Desligar câmera':'Ligar câmera';
+};
+$('copy').onclick=()=>navigator.clipboard.writeText(`Entre na minha sala StreamBuddies! Código: ${roomCode}`).then(()=>status('Código copiado!')).catch(()=>status('Código da sala: '+roomCode));
+$('leave').onclick=()=>{
+ socket?.emit('leave-room');socket?.disconnect();localStream?.getTracks().forEach(t=>t.stop());
+ for(const pc of peers.values())pc.close();location.reload();
+};
+})();
+</script>
+</body></html>
