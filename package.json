@@ -1,8 +1,0 @@
-{
-  "name": "streambuddies-site",
-  "version": "1.0.0",
-  "private": true,
-  "description": "Salas WebRTC para convidados com áudio individual",
-  "scripts": {"start": "node server.js"},
-  "dependencies": {"express": "^4.21.2", "socket.io": "^4.8.1"}
-}
